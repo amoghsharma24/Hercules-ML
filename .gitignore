@@ -9,6 +9,9 @@ env/
 
 runs/
 outputs/*
+!outputs/
+!outputs/plots/
+!outputs/plots/model_comparison_dataset_vs_accuracy.png
 
 OneDrive_*/
 *.7z
