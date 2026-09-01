@@ -2,6 +2,9 @@
 
 The saved frames become real Raspberry Pi camera backgrounds for the synthetic
 dataset generator.
+
+Author:
+    Amogh Sharma <amoghsharma02@gmail.com>
 """
 
 from __future__ import annotations
@@ -17,7 +20,10 @@ DEFAULT_VIDEO_DIR = PROJECT_ROOT / "data" / "videos"
 DEFAULT_OUT_DIR = PROJECT_ROOT / "data" / "backgrounds"
 VIDEO_EXTENSIONS = (".mp4", ".avi", ".mov", ".mkv")
 
-# Reading frame-extraction settings from the command line.
+# Builds the CLI for frame extraction.
+#
+# Defaults point at data/videos/ and data/backgrounds/ so the simplest
+# call only needs --every_sec.
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Extract background frames from Raspberry Pi videos."
@@ -48,7 +54,7 @@ def parse_args() -> argparse.Namespace:
     )
     return parser.parse_args()
 
-# Finding video files that can be sampled for background frames.
+# Finds video files that can be sampled for background frames.
 def list_videos(video_dir: Path) -> list[Path]:
     return sorted(
         path
@@ -56,7 +62,11 @@ def list_videos(video_dir: Path) -> list[Path]:
         if path.is_file() and path.suffix.lower() in VIDEO_EXTENSIONS
     )
 
-# Sampling frames from one video and saving them as numbered images.
+# Samples frames from one video and saves them as numbered images.
+#
+# Frames are taken every N seconds (converted to a frame step from the
+# video's FPS). If the video reports no FPS, 30 is assumed so the loop
+# still runs. Files are named video_stem_000000.jpg so they stay sorted.
 def extract_frames(
     video_path: Path, out_dir: Path, every_sec: float, jpeg_quality: int
 ) -> int:
@@ -97,7 +107,10 @@ def extract_frames(
     print(f"Saved {saved_count} frames from {video_path.name}.")
     return saved_count
 
-# Running frame extraction across one source file or a whole video folder.
+# Runs frame extraction across every video in the input folder.
+#
+# Warns and exits cleanly when the folder is missing or has no videos,
+# then loops the extractor over each file and prints a final total.
 def main() -> None:
     args = parse_args()
     video_dir = args.video_dir.resolve()
