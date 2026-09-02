@@ -1,4 +1,8 @@
-"""Generate a synthetic YOLO dataset for cockroach detection."""
+"""Generate a synthetic YOLO dataset for cockroach detection.
+
+Author:
+    Amogh Sharma <amoghsharma02@gmail.com>
+"""
 
 from __future__ import annotations
 
@@ -33,7 +37,10 @@ class RealismConfig:
     output_width: int
     output_height: int
 
-# Reading dataset size, realism controls, and output paths from the command line.
+# Builds the command-line interface for the synthetic dataset generator.
+#
+# Every realism knob has a default so a bare run still produces a usable
+# dataset. The ratio-style flags are validated in main() rather than here.
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Paste cockroach cutouts onto real backgrounds and write YOLO labels."
@@ -137,7 +144,8 @@ def parse_args() -> argparse.Namespace:
     )
     return parser.parse_args()
 
-# Listing supported background image files from one directory.
+# Lists supported background image files from one directory, sorted by name
+# so a run is deterministic given the same folder contents.
 def list_images(directory: Path) -> list[Path]:
     return sorted(
         path
@@ -145,7 +153,8 @@ def list_images(directory: Path) -> list[Path]:
         if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
     )
 
-# Listing transparent cockroach cutout PNG files from one directory.
+# Lists transparent cockroach cutouts from one directory.
+# Only PNGs are accepted because the cutouts need an alpha channel.
 def list_cutouts(directory: Path) -> list[Path]:
     return sorted(
         path
@@ -153,7 +162,11 @@ def list_cutouts(directory: Path) -> list[Path]:
         if path.is_file() and path.suffix.lower() == ".png"
     )
 
-# Finding the visible alpha bounds of a transformed cockroach cutout.
+# Finds the tight bounding box of the opaque pixels in a cutout.
+#
+# YOLO labels must wrap the visible roach, not the whole (possibly padded)
+# PNG canvas, so the box is taken from the alpha channel directly. Returns
+# None when the cutout is fully transparent.
 def alpha_bbox(image: Image.Image) -> tuple[int, int, int, int] | None:
     alpha = np.array(image.split()[-1])
     ys, xs = np.where(alpha > 10)
@@ -161,21 +174,30 @@ def alpha_bbox(image: Image.Image) -> tuple[int, int, int, int] | None:
         return None
     return int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())
 
-# Converting a pixel box into one normalized YOLO label row.
+# Converts a pixel box into one normalized YOLO label row.
+#
+# YOLO wants class_id plus center/size expressed as fractions of the
+# image width and height, so the box corners are converted and rounded
+# to 6 decimals to keep label files short.
 def to_yolo_label(box: tuple[int, int, int, int], width: int, height: int) -> str:
     x1, y1, x2, y2 = box
     center_x = ((x1 + x2) / 2) / width
     center_y = ((y1 + y2) / 2) / height
     box_width = (x2 - x1) / width
     box_height = (y2 - y1) / height
-    # Writing YOLO label format as class_id center_x center_y width height.
+    # YOLO label format: class_id center_x center_y width height.
     return f"0 {center_x:.6f} {center_y:.6f} {box_width:.6f} {box_height:.6f}"
 
-# Keeping a color or alpha value inside the valid image range.
+# Clamps a value into the 0-255 range used by image channels.
 def clamp(value: int) -> int:
     return max(0, min(255, value))
 
-# Cropping and flipping a background to create camera-view variation.
+# Crops and flips a background to create camera-view variation.
+#
+# Most frames are randomly cropped then resized back, which shifts the
+# framing slightly so the model does not memorize one fixed angle. A
+# random horizontal (and occasionally vertical) flip adds more variety.
+# Very small images are returned untouched to avoid upscaling artifacts.
 def random_crop_or_resize(image: Image.Image, rng: random.Random) -> Image.Image:
     width, height = image.size
     if width < 64 or height < 64:
@@ -198,7 +220,11 @@ def random_crop_or_resize(image: Image.Image, rng: random.Random) -> Image.Image
 
     return image
 
-# Adding simple floor, wall, clutter, and rough-surface structure to backgrounds.
+# Adds simple floor, wall, corner, dark-area, or clutter structure.
+#
+# Synthetic backgrounds start as plain photos, so this overlays faint
+# geometric detail (tiles, wall lines, corners) to make the scenes feel
+# more like the real camera view the model will see.
 def add_surface_structure(image: Image.Image, rng: random.Random) -> Image.Image:
     width, height = image.size
     overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
@@ -232,7 +258,7 @@ def add_surface_structure(image: Image.Image, rng: random.Random) -> Image.Image
 
     return Image.alpha_composite(image.convert("RGBA"), overlay).convert("RGB")
 
-# Blending fine noise texture into a surface so it feels less flat.
+# Blends fine noise into a surface so it looks less flat.
 def add_rough_texture(image: Image.Image, rng: random.Random, strength: float) -> Image.Image:
     width, height = image.size
     arr = np.zeros((height, width, 4), dtype=np.uint8)
@@ -242,7 +268,11 @@ def add_rough_texture(image: Image.Image, rng: random.Random, strength: float) -
     texture = Image.fromarray(arr, "RGBA").filter(ImageFilter.GaussianBlur(rng.uniform(0.4, 1.5)))
     return Image.alpha_composite(image.convert("RGBA"), texture)
 
-# Painting broad shadows and dark regions across the frame.
+# Paints broad shadows and dark regions across the frame.
+#
+# Real rooms have uneven lighting, so a soft ellipse or edge gradient is
+# composited on top. The strong variant makes darker patches used for
+# the "dark area" surface type.
 def add_gradient_shadow(image: Image.Image, rng: random.Random, strong: bool) -> Image.Image:
     width, height = image.size
     shadow = Image.new("L", image.size, 0)
@@ -261,7 +291,11 @@ def add_gradient_shadow(image: Image.Image, rng: random.Random, strong: bool) ->
     layer.putalpha(shadow)
     return Image.alpha_composite(image.convert("RGBA"), layer)
 
-# Applying camera-like color, brightness, blur, noise, and compression effects.
+# Applies camera-like color, brightness, blur, noise, and compression.
+#
+# Real Raspberry Pi footage is not perfectly clean, so this chains the
+# individual effects (crop, surface structure, tint, blur, noise) into
+# one pass that makes a generated background look like a real frame.
 def apply_camera_effects(
     image: Image.Image, rng: random.Random, config: RealismConfig
 ) -> Image.Image:
@@ -293,7 +327,7 @@ def apply_camera_effects(
 
     return image
 
-# Adding sensor-style noise to the full background image.
+# Adds sensor-style noise to the full background image.
 def add_background_noise(image: Image.Image, rng: random.Random, strength: float) -> Image.Image:
     arr = np.asarray(image).astype(np.float32)
     sigma = rng.uniform(4, 24) * strength
@@ -301,14 +335,20 @@ def add_background_noise(image: Image.Image, rng: random.Random, strength: float
     arr = np.clip(arr + noise, 0, 255).astype(np.uint8)
     return Image.fromarray(arr)
 
-# Re-encoding an image as JPEG to imitate camera compression artifacts.
+# Re-encodes the image as JPEG to imitate camera compression artifacts.
+#
+# Round-tripping through a low-quality JPEG adds the blocky noise real
+# frames get, which the model should learn to ignore.
 def apply_jpeg_compression(image: Image.Image, rng: random.Random) -> Image.Image:
     buffer = BytesIO()
     image.save(buffer, format="JPEG", quality=rng.randint(48, 92))
     buffer.seek(0)
     return Image.open(buffer).convert("RGB")
 
-# Applying directional blur to imitate fast movement or camera shake.
+# Applies directional blur to imitate fast movement or camera shake.
+#
+# A kernel line is built and rotated to a random shallow angle, then
+# convolved over the image. Used on both whole frames and cutouts.
 def motion_blur(image: Image.Image, rng: random.Random) -> Image.Image:
     arr = np.array(image)
     kernel_size = rng.choice([5, 7, 9, 11, 13])
@@ -322,7 +362,11 @@ def motion_blur(image: Image.Image, rng: random.Random) -> Image.Image:
     blurred = cv2.filter2D(arr, -1, kernel)
     return Image.fromarray(blurred)
 
-# Measuring local background color and contrast under a future pasted cutout.
+# Measures local background color and contrast under a future cutout.
+#
+# The pasted roach is recolored to match whatever sits underneath it, so
+# this reads the mean and spread of the background patch it will cover.
+# An empty patch returns neutral values so the math never divides by zero.
 def local_stats(background: Image.Image, box: tuple[int, int, int, int]) -> tuple[np.ndarray, np.ndarray]:
     x1, y1, x2, y2 = box
     patch = np.asarray(background.crop((x1, y1, x2, y2)).convert("RGB")).astype(np.float32)
@@ -330,7 +374,11 @@ def local_stats(background: Image.Image, box: tuple[int, int, int, int]) -> tupl
         return np.array([128, 128, 128]), np.array([32, 32, 32])
     return patch.mean(axis=(0, 1)), patch.std(axis=(0, 1)) + 1.0
 
-# Matching a cockroach cutout to the local background lighting and noise.
+# Recolours a cutout to match the local background lighting and noise.
+#
+# The cutout's own colors are shifted toward the background patch's mean
+# and stretched to its contrast, then noise and brightness are applied on
+# top. This is what stops the roach looking like a bright sticker.
 def match_cutout_to_background(
     cutout: Image.Image,
     background: Image.Image,
@@ -362,7 +410,11 @@ def match_cutout_to_background(
     alpha_img = Image.fromarray(np.clip(alpha_arr, 0, 255).astype(np.uint8), "L")
     return Image.merge("RGBA", (*Image.fromarray(rgb).split(), alpha_img))
 
-# Resizing, rotating, darkening, and blurring a cockroach cutout.
+# Resizes, rotates, darkens, and blurs a cockroach cutout.
+#
+# Each cutout is scaled and rotated randomly so the model sees many poses
+# and sizes, then brightness/contrast/color are tweaked and blur or
+# motion blur applied. The output stays RGBA so alpha is preserved.
 def transform_cutout(
     cutout: Image.Image, rng: random.Random, config: RealismConfig
 ) -> Image.Image:
@@ -391,7 +443,11 @@ def transform_cutout(
 
     return cutout
 
-# Adding a soft contact shadow under a pasted cockroach.
+# Adds a soft contact shadow under a pasted cockroach.
+#
+# A faint offset copy of the cutout's alpha is blurred and dropped just
+# below-right of the roach, anchoring it to the floor so it does not
+# float above the scene.
 def add_shadow(
     background: Image.Image,
     cutout: Image.Image,
@@ -412,7 +468,10 @@ def add_shadow(
     )
     return Image.alpha_composite(background, shadow_layer)
 
-# Drawing cable-like clutter that can act as a hard negative.
+# Draws a cable-like line that can act as a hard negative.
+#
+# Cables look enough like a roach's long body that the model might false
+# positive on them, so they are added as clutter the model must ignore.
 def draw_cable(draw: ImageDraw.ImageDraw, rng: random.Random, width: int, height: int) -> None:
     points = []
     x = rng.randint(0, width)
@@ -423,7 +482,10 @@ def draw_cable(draw: ImageDraw.ImageDraw, rng: random.Random, width: int, height
         y += rng.randint(-height // 4, height // 4)
     draw.line(points, fill=(rng.randint(5, 55), rng.randint(5, 55), rng.randint(5, 55), 180), width=rng.randint(2, 5))
 
-# Drawing an insect-like distractor that should not be labelled as a cockroach.
+# Draws an insect-like distractor that must not be labelled a cockroach.
+#
+# The point is to give the model hard negative examples: shapes close to
+# a roach but with no label, so it learns to hold off rather than fire.
 def draw_insect_like(draw: ImageDraw.ImageDraw, rng: random.Random, width: int, height: int) -> None:
     cx = rng.randint(8, max(8, width - 8))
     cy = rng.randint(8, max(8, height - 8))
@@ -436,7 +498,7 @@ def draw_insect_like(draw: ImageDraw.ImageDraw, rng: random.Random, width: int, 
         dy = rng.randint(-body_h, body_h)
         draw.line((cx, cy, cx + dx, cy + dy), fill=color, width=1)
 
-# Drawing leaf-like debris for extra visual clutter.
+# Draws leaf-like debris for extra visual clutter.
 def draw_leaf(draw: ImageDraw.ImageDraw, rng: random.Random, width: int, height: int) -> None:
     cx = rng.randint(0, width)
     cy = rng.randint(0, height)
@@ -446,7 +508,12 @@ def draw_leaf(draw: ImageDraw.ImageDraw, rng: random.Random, width: int, height:
     draw.ellipse((cx - leaf_w, cy - leaf_h, cx + leaf_w, cy + leaf_h), fill=color)
     draw.line((cx - leaf_w, cy, cx + leaf_w, cy), fill=(30, 60, 20, 120), width=1)
 
-# Adding random debris and distractors to make negative examples harder.
+# Adds random debris and distractors to make negative examples harder.
+#
+# The kind is picked from a list (crumb, screw, leaf, dirt, stain, cable,
+# insect) and scattered over the scene. When insect_like is set, insect
+# distractors are included so negatives contain roach-like shapes the
+# model has to reject.
 def add_debris(
     image: Image.Image, rng: random.Random, count: int, insect_like: bool
 ) -> Image.Image:
@@ -486,7 +553,10 @@ def add_debris(
     layer = layer.filter(ImageFilter.GaussianBlur(rng.uniform(0.0, 0.6)))
     return Image.alpha_composite(image.convert("RGBA"), layer)
 
-# Placing a foreground object over part of the scene to simulate occlusion.
+# Places a foreground object over part of the scene to simulate occlusion.
+#
+# Partially hiding a roach (or its label area) teaches the model to still
+# find it when something is in the way.
 def add_occluder(
     background: Image.Image,
     roach_box: tuple[int, int, int, int],
@@ -507,7 +577,11 @@ def add_occluder(
     layer = layer.filter(ImageFilter.GaussianBlur(rng.uniform(0.2, 0.9)))
     return Image.alpha_composite(background.convert("RGBA"), layer)
 
-# Choosing a valid paste position for one transformed cockroach.
+# Chooses a valid paste position for one transformed cockroach.
+#
+# Roughly half the time the roach is biased toward the edges of the frame
+# (where roaches tend to appear) and the rest of the time it is placed
+# anywhere, so the model does not learn one corner.
 def choose_position(
     background_size: tuple[int, int], cutout_size: tuple[int, int], rng: random.Random
 ) -> tuple[int, int]:
@@ -529,13 +603,16 @@ def choose_position(
 
     return rng.randint(0, width - cutout_width), rng.randint(0, height - cutout_height)
 
-# Creating the expected train and validation image and label folders.
+# Creates the expected train and val image and label folders.
 def prepare_output_dirs(out_dir: Path) -> None:
     for split in ("train", "val"):
         (out_dir / "images" / split).mkdir(parents=True, exist_ok=True)
         (out_dir / "labels" / split).mkdir(parents=True, exist_ok=True)
 
-# Removing previously generated images and labels before a clean run.
+# Removes previously generated images and labels before a clean run.
+#
+# .gitkeep files are left in place so the empty directories still survive
+# in Git when the dataset folder is otherwise ignored.
 def clean_output_dirs(out_dir: Path) -> None:
     for folder in (
         out_dir / "images" / "train",
@@ -548,7 +625,12 @@ def clean_output_dirs(out_dir: Path) -> None:
             if path.is_file() and path.name != ".gitkeep":
                 path.unlink()
 
-# Generating one synthetic image and its YOLO labels.
+# Generates one synthetic image and its YOLO labels.
+#
+# One background is picked, passed through camera effects, then zero to
+# three cutouts are pasted and labelled. Negative images (no roach) are
+# deliberately kept so the model learns that empty scenes are normal.
+# Returns True if the image ended up with at least one labelled roach.
 def generate_one(
     index: int,
     split: str,
@@ -576,7 +658,7 @@ def generate_one(
             insect_like=rng.random() < 0.55,
         )
 
-    # Generating synthetic data is creating many labelled examples from limited real footage.
+    # Synthetic data turns limited real footage into many labelled examples.
     roach_count = 0 if rng.random() < negative_ratio else rng.choice([1, 1, 1, 2, 2, 3])
 
     if roach_count == 0 and rng.random() < 0.85:
@@ -609,7 +691,7 @@ def generate_one(
         if rng.random() < 0.28:
             background = add_occluder(background, label_box, rng)
 
-    # Keeping negative images is teaching the model that empty scenes are normal.
+    # Keeping negatives teaches the model that empty scenes are normal.
     final = background.convert("RGB")
     if rng.random() < config.motion_blur_ratio * 0.35:
         final = motion_blur(final, rng)
@@ -621,12 +703,16 @@ def generate_one(
     label_path.write_text("\n".join(labels), encoding="utf-8")
     return bool(labels)
 
-# Validating that a probability-style setting is between zero and one.
+# Validates that a probability-style setting is between 0 and 1.
 def validate_ratio(name: str, value: float) -> None:
     if not 0 <= value < 1:
         raise SystemExit(f"--{name} must be at least 0 and less than 1.")
 
-# Running the full synthetic dataset generation workflow.
+# Runs the full synthetic dataset generation workflow.
+#
+# Validates every flag, seeds the RNG so runs are reproducible, resolves
+# the three directories, then loops generating images while printing
+# progress and a final positive/negative count.
 def main() -> None:
     args = parse_args()
     if args.num <= 0:
