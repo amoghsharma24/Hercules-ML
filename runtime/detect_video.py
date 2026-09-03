@@ -1,4 +1,8 @@
-"""Run YOLO cockroach detection on a video file or Raspberry Pi camera."""
+"""Run YOLO cockroach detection on a video file or Raspberry Pi camera.
+
+Author:
+    Amogh Sharma <amoghsharma02@gmail.com>
+"""
 
 from __future__ import annotations
 
@@ -13,7 +17,11 @@ from ultralytics import YOLO
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT = PROJECT_ROOT / "outputs" / "videos" / "detections.mp4"
 
-# Reading command-line settings for model, source, confidence, motion gate, and saving.
+# Builds the command-line interface for the detection script.
+#
+# Only --model is required. The rest have defaults that make the common
+# case work with a single flag: the default camera (index 0), a 0.35
+# confidence threshold, the motion gate off, and no saved video.
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run cockroach detection on video.")
     parser.add_argument("--model", required=True, type=Path, help="Path to YOLO model weights.")
@@ -37,7 +45,11 @@ def parse_args() -> argparse.Namespace:
     )
     return parser.parse_args()
 
-# Opening either a camera index or a video file as the input stream.
+# Opens the input stream, handling both camera indexes and file paths.
+#
+# The same --source flag takes either form, so a value made only of
+# digits is treated as a camera index and anything else as a video file
+# path. Raises immediately if the stream cannot be opened.
 def open_source(source: str) -> cv2.VideoCapture:
     video_source: int | str = int(source) if source.isdigit() else source
     cap = cv2.VideoCapture(video_source)
@@ -45,7 +57,11 @@ def open_source(source: str) -> cv2.VideoCapture:
         raise SystemExit(f"Video source cannot be opened: {source}")
     return cap
 
-# Creating the output video writer with the same frame size as the input.
+# Creates the output video writer to match the input stream.
+#
+# The writer must use the same frame size and FPS as the input or OpenCV
+# produces a corrupt file, so both are read straight from the capture.
+# Falls back to 640x480 and 20 FPS if the capture cannot report them.
 def create_writer(cap: cv2.VideoCapture, save_path: Path) -> cv2.VideoWriter:
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 640)
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 480)
@@ -61,7 +77,13 @@ def create_writer(cap: cv2.VideoCapture, save_path: Path) -> cv2.VideoWriter:
         raise SystemExit(f"Output video cannot be opened for writing: {save_path}")
     return writer
 
-# Deciding whether the current frame has enough motion to run YOLO.
+# Decides whether YOLO should run on the current frame.
+#
+# Without the motion gate every frame is processed. With it, the frame
+# is diffed against a running background model and YOLO only runs when
+# enough pixels changed. This saves Raspberry Pi compute on still
+# footage, where most frames are empty. The first frame only seeds the
+# background model and is never processed.
 def should_run_yolo(
     frame, background_model, motion_gate: bool
 ) -> tuple[bool, float, object]:
@@ -77,10 +99,12 @@ def should_run_yolo(
     diff = cv2.absdiff(gray, cv2.convertScaleAbs(background_model))
     _, threshold = cv2.threshold(diff, 25, 255, cv2.THRESH_BINARY)
     motion_score = float((threshold > 0).mean())
-    # Running motion gating is saving Raspberry Pi compute by skipping still frames.
+    # Skipping still frames is what makes the motion gate worth it on the Pi:
+    # a scene with no movement costs one cheap diff instead of a full YOLO pass.
     return motion_score > 0.003, motion_score, background_model
 
-# Drawing cockroach boxes and confidence scores onto the current frame.
+# Draws each detection box and its confidence score onto the frame.
+# The label is nudged up so it does not sit on the top edge of the frame.
 def draw_detections(frame, detections: list[tuple[int, int, int, int, float]]) -> None:
     for x1, y1, x2, y2, confidence in detections:
         cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
@@ -94,7 +118,8 @@ def draw_detections(frame, detections: list[tuple[int, int, int, int, float]]) -
             2,
         )
 
-# Running the full video detection loop from loading the model to releasing outputs.
+# Runs the full detection loop: load model, open source, process frames,
+# draw boxes, and report FPS and how many frames YOLO actually ran on.
 def main() -> None:
     args = parse_args()
     model_path = args.model.resolve()
