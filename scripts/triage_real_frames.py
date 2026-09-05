@@ -1,4 +1,8 @@
-"""Score and preview real frames before adding them as training backgrounds."""
+"""Score and preview real frames before adding them as training backgrounds.
+
+Author:
+    Amogh Sharma <amoghsharma02@gmail.com>
+"""
 
 from __future__ import annotations
 
@@ -35,7 +39,10 @@ class FrameScore:
     reason: str
     score: float
 
-# Reading triage thresholds, output paths, and copy options from the command line.
+# Builds the CLI for the real-frame triage step.
+#
+# Thresholds (blur, brightness) and the max-per-folder cap are exposed so
+# the candidate selection can be tuned without editing code.
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Create a first-pass candidate set from raw real camera frames."
@@ -52,7 +59,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--copy", action="store_true", help="Copy candidate frames to out_dir.")
     return parser.parse_args()
 
-# Finding real image frames under the source folder.
+# Finds real image frames under the source folder, recursing into subfolders.
 def list_images(source: Path) -> list[Path]:
     return sorted(
         path
@@ -60,7 +67,11 @@ def list_images(source: Path) -> list[Path]:
         if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
     )
 
-# Creating a small perceptual hash for spotting near-duplicate frames.
+# Creates a small perceptual hash for spotting near-duplicate frames.
+#
+# The image is shrunk to 8x8 and each pixel compared to the mean, giving
+# a 64-bit fingerprint. Frames that hash the same are treated as repeats
+# and deduplicated during selection.
 def average_hash(gray: np.ndarray) -> str:
     small = cv2.resize(gray, (8, 8), interpolation=cv2.INTER_AREA)
     bits = small > small.mean()
@@ -69,7 +80,12 @@ def average_hash(gray: np.ndarray) -> str:
         value = (value << 1) | int(bit)
     return f"{value:016x}"
 
-# Scoring one frame for blur, brightness, contrast, and usefulness.
+# Scores one frame for blur, brightness, contrast, and usefulness.
+#
+# Blur is measured with the Laplacian variance (higher = sharper), and a
+# frame is rejected if any threshold trips. The final score favours sharp,
+# contrasty frames close to mid-brightness. Unreadable files get a reject
+# decision with all-zero metrics rather than crashing the run.
 def score_frame(path: Path, args: argparse.Namespace) -> FrameScore:
     image = cv2.imread(str(path), cv2.IMREAD_COLOR)
     if image is None:
@@ -106,7 +122,11 @@ def score_frame(path: Path, args: argparse.Namespace) -> FrameScore:
         score=score,
     )
 
-# Selecting diverse high-quality background candidates from each source folder.
+# Selects diverse high-quality background candidates from each folder.
+#
+# Candidates are ranked by score within each source folder, and a frame
+# whose perceptual hash was already seen is skipped so the same scene is
+# not kept twice. Each folder is capped at max_per_folder frames.
 def select_candidates(scores: list[FrameScore], max_per_folder: int) -> list[FrameScore]:
     selected: list[FrameScore] = []
     seen_hashes: set[str] = set()
@@ -130,7 +150,7 @@ def select_candidates(scores: list[FrameScore], max_per_folder: int) -> list[Fra
 
     return sorted(selected, key=lambda frame: str(frame.source))
 
-# Writing frame scores and selection decisions into a CSV manifest.
+# Writes frame scores and selection decisions into a CSV manifest.
 def write_manifest(path: Path, scores: list[FrameScore], selected: set[Path]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as handle:
@@ -167,7 +187,10 @@ def write_manifest(path: Path, scores: list[FrameScore], selected: set[Path]) ->
                 ]
             )
 
-# Copying selected background candidates into the training background folder.
+# Copies selected background candidates into the training background folder.
+#
+# The target name is prefixed with the source subfolder (flattened) so
+# files from different camera folders cannot collide.
 def copy_candidates(candidates: list[FrameScore], out_dir: Path, source_root: Path) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     for index, item in enumerate(candidates):
@@ -179,7 +202,11 @@ def copy_candidates(candidates: list[FrameScore], out_dir: Path, source_root: Pa
         target = out_dir / f"{prefix}_{index:04d}_{item.source.name}"
         shutil.copy2(item.source, target)
 
-# Making a visual sheet of selected real frames for quick review.
+# Makes a visual sheet of selected real frames for quick review.
+#
+# The sheet caps at max_images so huge candidate sets still produce a
+# manageable image, and a caption shows each frame's blur score and
+# source folder to speed up manual filtering.
 def make_contact_sheet(candidates: list[FrameScore], out_path: Path, max_images: int) -> None:
     items = candidates[:max_images]
     if not items:
@@ -217,7 +244,10 @@ def make_contact_sheet(candidates: list[FrameScore], out_path: Path, max_images:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     sheet.save(out_path, quality=92)
 
-# Running the full real-frame triage workflow.
+# Runs the full real-frame triage workflow.
+#
+# Scores every image, selects the diverse candidates, writes the manifest
+# and contact sheet, and (when --copy is passed) copies candidates out.
 def main() -> None:
     args = parse_args()
     source = args.source.resolve()
