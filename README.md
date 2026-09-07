@@ -1,8 +1,53 @@
-# HERCULES Cockroach Detection
+<div align="center">
+
+# 🪳 HERCULES Cockroach Detection
+
+**A computer-vision pipeline for finding cockroaches in Raspberry Pi camera footage.**
+
+[![Python](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python&logoColor=white)](https://www.python.org/)
+[![YOLO](https://img.shields.io/badge/YOLOv8-Ultralytics-111F68?logo=yolo&logoColor=white)](https://docs.ultralytics.com/)
+[![mAP50](https://img.shields.io/badge/mAP50-0.959-brightgreen)](EXPERIMENTS.md)
+[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
+
+Authored by [Amogh Sharma](https://amoghsharma-dev.vercel.app/)
+</div>
+
 
 This project is a computer vision pipeline for finding cockroaches in video from a Raspberry Pi camera.
 
 The main focus is the training data. The model only works well if it learns from scenes that look like the real camera setup. To do this, the project uses real background frames, transparent cockroach cutouts, automatic YOLO labels, and a small YOLO model that can run on video or a camera stream.
+
+---
+
+## Table of Contents
+
+- [Prerequisites](#prerequisites)
+- [Why Synthetic Data Is Used](#why-synthetic-data-is-used)
+- [Why Real Camera Backgrounds Matter](#why-real-camera-backgrounds-matter)
+- [Why YOLO Is Used](#why-yolo-is-used)
+- [Why Motion Detection Is Included](#why-motion-detection-is-included)
+- [Project Structure](#project-structure)
+- [Installing Requirements](#installing-requirements)
+- [Setting Up Data Folders](#setting-up-data-folders)
+- [Extracting Background Frames](#extracting-background-frames)
+- [Sorting Real Image Frames](#sorting-real-image-frames)
+- [Building A Real Review Set](#building-a-real-review-set)
+- [Generating A Synthetic Dataset](#generating-a-synthetic-dataset)
+- [Training YOLO](#training-yolo)
+- [Running Detection](#running-detection)
+- [Results](#results)
+- [Limitations](#limitations)
+- [Next Steps](#next-steps)
+
+---
+
+## Prerequisites
+
+| Requirement | Notes |
+| --- | --- |
+| **Python 3.10+** | The scripts use `X \| Y` type hints and other modern syntax. |
+| **CUDA GPU** (recommended) | Speeds up training. Inference on a Raspberry Pi does not need one. |
+| **RAM / VRAM** | On Windows, large `imgsz`/`batch` values can run out of memory see [EXPERIMENTS.md](EXPERIMENTS.md). |
 
 ## Why Synthetic Data Is Used
 
@@ -44,6 +89,7 @@ The runtime can use simple motion detection before running YOLO. This means YOLO
 ```text
 HERCULES-cockroach-detection/
 ├── README.md
+├── EXPERIMENTS.md
 ├── requirements.txt
 ├── .gitignore
 ├── scripts/
@@ -58,10 +104,7 @@ HERCULES-cockroach-detection/
 ├── runtime/
 │   └── detect_video.py
 ├── training/
-│   ├── roach_dataset.yaml
-│   └── TRAINING.md
-├── docs/
-│   └── team_explanation.md
+│   └── roach_dataset.yaml
 ├── data/
 │   ├── videos/
 │   ├── backgrounds/
@@ -89,6 +132,18 @@ pip install -r requirements.txt
 ```
 
 On Raspberry Pi, OpenCV can depend on the operating system image. If `opencv-python` causes problems, install the system OpenCV package for the Pi and keep the other requirements the same.
+
+## Setting Up Data Folders
+
+The scripts expect a few folders under `data/`. Create them before running anything:
+
+```bash
+mkdir -p data/videos data/backgrounds data/roach_cutouts data/synthetic_dataset
+```
+
+- Place Raspberry Pi camera videos in `data/videos/`
+- Place transparent cockroach PNG cutouts in `data/roach_cutouts/`
+- `data/backgrounds/` and `data/synthetic_dataset/` are filled by the scripts
 
 ## Extracting Background Frames
 
@@ -151,10 +206,15 @@ python scripts/generate_synthetic_dataset.py --num 5000 --seed 42 --val_ratio 0.
 
 To make a smaller preview first, run:
 
+<details>
+<summary>Show the preview command</summary>
+
 ```bash
 python scripts/generate_synthetic_dataset.py --num 300 --seed 77 --val_ratio 0.15 --clean --negative_ratio 0.30 --motion_blur_ratio 0.20 --hard_negative_ratio 0.30 --shadow_strength 1.10 --noise_strength 1.00 --min_roach_scale 0.22 --max_roach_scale 0.60 --cutout_brightness_min 0.30 --cutout_brightness_max 0.85 --background_dir data/background_candidates
 python scripts/create_preview_contact_sheet.py --max_images 100 --out outputs/previews/preview_contact_sheet.jpg
 ```
+
+</details>
 
 The generator reads:
 
@@ -175,14 +235,16 @@ class_id center_x center_y width height
 
 The box values are normalised from 0 to 1. Empty label files are used for images with no cockroach. These negative examples teach the model that normal background clutter should not always cause a detection.
 
-Useful realism settings:
+### Realism Settings
 
-- `--motion_blur_ratio` controls how often blur is added.
-- `--hard_negative_ratio` controls how often distractors are added.
-- `--shadow_strength` controls contact shadow strength.
-- `--noise_strength` controls camera-style noise.
-- `--min_roach_scale` and `--max_roach_scale` control cockroach size.
-- `--cutout_brightness_min` and `--cutout_brightness_max` make pasted cockroaches darker so they look less like bright cutouts.
+| Flag | What it controls |
+| --- | --- |
+| `--motion_blur_ratio` | How often blur is added. |
+| `--hard_negative_ratio` | How often distractors are added. |
+| `--shadow_strength` | Contact shadow strength. |
+| `--noise_strength` | Camera-style noise. |
+| `--min_roach_scale` / `--max_roach_scale` | Cockroach size range. |
+| `--cutout_brightness_min` / `--cutout_brightness_max` | Darkens pasted cockroaches so they look less like bright cutouts. |
 
 ## Training YOLO
 
@@ -191,6 +253,8 @@ After generating the dataset, train a small YOLO model:
 ```bash
 yolo detect train model=yolov8n.pt data=training/roach_dataset.yaml imgsz=416 epochs=50 batch=16
 ```
+
+Training requires a CUDA GPU. If you do not have one, use `device=cpu` (this will be slow).
 
 The best model is usually saved at:
 
@@ -224,6 +288,14 @@ If `--save` is used without a path, the output video is written to:
 outputs/videos/detections.mp4
 ```
 
+## Results
+
+Dataset size vs. validation accuracy across the four training rounds:
+
+![Model comparison](outputs/plots/model_comparison_dataset_vs_accuracy.png)
+
+See [EXPERIMENTS.md](EXPERIMENTS.md) for the full record of each training round, including dataset sizes, validation metrics, and what was learnt from each run.
+
 ## Limitations
 
 - Synthetic cockroaches may not fully match real cockroaches.
@@ -239,3 +311,9 @@ outputs/videos/detections.mp4
 - Label clear real cockroach frames.
 - Keep adding false positives as hard negatives.
 - Build a small real validation set for honest testing.
+
+---
+
+## License
+
+MIT - see [LICENSE](LICENSE).
