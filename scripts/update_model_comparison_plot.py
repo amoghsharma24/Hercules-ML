@@ -1,4 +1,8 @@
-"""Update model comparison CSV and plot for training experiments."""
+"""Update model comparison CSV and plot for training experiments.
+
+Author:
+    Amogh Sharma <amoghsharma02@gmail.com>
+"""
 
 from __future__ import annotations
 
@@ -59,7 +63,7 @@ ROWS = [
     },
 ]
 
-# Writing the experiment metrics into the comparison CSV file.
+# Writes the experiment metrics into the comparison CSV file.
 def write_summary() -> None:
     SUMMARY.parent.mkdir(parents=True, exist_ok=True)
     with SUMMARY.open("w", newline="", encoding="utf-8") as handle:
@@ -67,7 +71,11 @@ def write_summary() -> None:
         writer.writeheader()
         writer.writerows(ROWS)
 
-# Plotting dataset size against validation metrics for each model round.
+# Plots dataset size against validation metrics for each model round.
+#
+# Bars show the training image count on the left axis, while mAP50,
+# mAP50-95, and recall are drawn as lines on a second axis so the trend
+# (more data -> better scores) is readable in one chart.
 def plot() -> None:
     PLOT.parent.mkdir(parents=True, exist_ok=True)
     models = [row["model"] for row in ROWS]
@@ -101,7 +109,7 @@ def plot() -> None:
     fig.savefig(PLOT, dpi=160)
     plt.close(fig)
 
-# Updating both the comparison table and graph together.
+# Updates both the comparison table and graph together.
 def main() -> None:
     write_summary()
     plot()

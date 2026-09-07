@@ -1,4 +1,8 @@
-"""Create enlarged crops around model detections for manual review."""
+"""Create enlarged crops around model detections for manual review.
+
+Author:
+    Amogh Sharma <amoghsharma02@gmail.com>
+"""
 
 from __future__ import annotations
 
@@ -32,7 +36,10 @@ class CropItem:
     box_index: int
     box: tuple[float, float, float, float]
 
-# Reading crop-sheet settings such as padding, output path, and tile size.
+# Builds the CLI for the crop-sheet generator.
+#
+# Padding controls how far the zoom extends around each box, and thumb/
+# cols control the tile size and grid layout of the output sheet.
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Make a zoomed review sheet from YOLO labels.")
     parser.add_argument("--raw_root", type=Path, default=DEFAULT_RAW_ROOT)
@@ -44,7 +51,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cols", type=int, default=5)
     return parser.parse_args()
 
-# Gathering supported image files from a folder tree.
+# Gathers supported image files from a folder tree.
 def list_images(folder: Path) -> list[Path]:
     return sorted(
         path
@@ -52,7 +59,10 @@ def list_images(folder: Path) -> list[Path]:
         if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
     )
 
-# Reading YOLO boxes as normalized center and size values.
+# Reads YOLO boxes as normalized center and size values.
+#
+# Malformed lines (fewer than 5 tokens, or non-numeric) are skipped so a
+# stray bad label file does not abort the whole sheet.
 def read_labels(path: Path) -> list[tuple[float, float, float, float]]:
     if not path.exists():
         return []
@@ -68,7 +78,10 @@ def read_labels(path: Path) -> list[tuple[float, float, float, float]]:
             continue
     return boxes
 
-# Collecting every saved detection box that should become a zoomed crop.
+# Collects every saved detection box that should become a zoomed crop.
+#
+# Each raw set folder is matched to its prediction label files across the
+# configured model runs, and every box becomes one CropItem for the sheet.
 def collect_crops(raw_root: Path, runs_root: Path) -> list[CropItem]:
     crops: list[CropItem] = []
     for set_dir in sorted(path for path in raw_root.iterdir() if path.is_dir()):
@@ -91,7 +104,10 @@ def collect_crops(raw_root: Path, runs_root: Path) -> list[CropItem]:
                     )
     return crops
 
-# Enlarging the region around one detection so small objects are easier to inspect.
+# Enlarges the region around one detection so small objects are easier to inspect.
+#
+# The crop is padded by the padding factor (with a 64px floor) and kept
+# inside the image bounds, centred on the box.
 def crop_around_box(image: Image.Image, box: tuple[float, float, float, float], padding: float) -> Image.Image:
     width, height = image.size
     cx, cy, bw, bh = box
@@ -109,7 +125,10 @@ def crop_around_box(image: Image.Image, box: tuple[float, float, float, float], 
     bottom = int(min(height, top + crop_h))
     return image.crop((left, top, right, bottom))
 
-# Marking the center of a crop where the model box should be inspected.
+# Marks the center of a crop where the model box should be inspected.
+#
+# The box is drawn inset from the tile edges so it does not clip against
+# the tile border where the crop has been padded with black.
 def draw_center_box(
     draw: ImageDraw.ImageDraw,
     tile_size: tuple[int, int],
@@ -119,7 +138,11 @@ def draw_center_box(
     margin = int(min(width, height) * 0.34)
     draw.rectangle((margin, margin, width - margin, height - margin), outline=color, width=3)
 
-# Arranging zoomed detection crops into a labelled review sheet.
+# Arranges zoomed detection crops into a labelled review sheet.
+#
+# Crops are capped at max_crops, each is centred in a fixed tile with a
+# caption naming its model and box index, then all tiles are laid out on
+# a grid and saved.
 def make_sheet(args: argparse.Namespace, crops: list[CropItem]) -> None:
     crops = crops[: args.max_crops]
     if not crops:
@@ -159,7 +182,7 @@ def make_sheet(args: argparse.Namespace, crops: list[CropItem]) -> None:
     args.out.parent.mkdir(parents=True, exist_ok=True)
     sheet.save(args.out, quality=94)
 
-# Creating the crop review sheet from all available prediction labels.
+# Creates the crop review sheet from all available prediction labels.
 def main() -> None:
     args = parse_args()
     if args.padding <= 0:

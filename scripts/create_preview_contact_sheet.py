@@ -1,4 +1,8 @@
-"""Create a labelled contact sheet from a generated YOLO dataset."""
+"""Create a labelled contact sheet from a generated YOLO dataset.
+
+Author:
+    Amogh Sharma <amoghsharma02@gmail.com>
+"""
 
 from __future__ import annotations
 
@@ -12,7 +16,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATASET_DIR = PROJECT_ROOT / "data" / "synthetic_dataset"
 DEFAULT_OUTPUT = PROJECT_ROOT / "outputs" / "previews" / "preview_contact_sheet.jpg"
 
-# Reading contact-sheet options such as dataset path, output path, and tile layout.
+# Builds the CLI for the preview contact-sheet generator.
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Draw YOLO boxes onto a preview sheet.")
     parser.add_argument("--dataset_dir", type=Path, default=DEFAULT_DATASET_DIR)
@@ -23,7 +27,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--thumb_h", type=int, default=180)
     return parser.parse_args()
 
-# Loading YOLO label lines for one preview image.
+# Loads YOLO label lines for one preview image.
 def read_labels(label_path: Path) -> list[str]:
     if not label_path.exists():
         return []
@@ -33,7 +37,10 @@ def read_labels(label_path: Path) -> list[str]:
         if line.strip()
     ]
 
-# Collecting train and validation images with their matching label files.
+# Collects train and val images with their matching label files.
+#
+# Only .jpg images are expected (the generator writes those), and each is
+# paired with its label file by stem.
 def collect_items(dataset_dir: Path) -> list[tuple[str, Path, Path]]:
     items = []
     for split in ("train", "val"):
@@ -43,7 +50,10 @@ def collect_items(dataset_dir: Path) -> list[tuple[str, Path, Path]]:
             items.append((split, image_path, label_dir / f"{image_path.stem}.txt"))
     return items
 
-# Drawing normalized YOLO boxes onto a resized preview tile.
+# Draws normalized YOLO boxes onto a resized preview tile.
+#
+# Boxes are denormalized against the source size, then scaled and shifted
+# to match the tile padding so they land on the roach in the preview.
 def draw_boxes(
     tile: Image.Image,
     labels: list[str],
@@ -66,7 +76,7 @@ def draw_boxes(
         y2 = (cy + bh / 2) * source_h * scale + pad_y
         draw.rectangle((x1, y1, x2, y2), outline=(255, 35, 35), width=3)
 
-# Building the preview contact sheet for a generated YOLO dataset.
+# Builds the preview contact sheet for a generated YOLO dataset.
 def main() -> None:
     args = parse_args()
     if args.max_images <= 0:
