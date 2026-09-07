@@ -1,4 +1,8 @@
-"""Build a review set from model predictions on real frames."""
+"""Build a review set from model predictions on real frames.
+
+Author:
+    Amogh Sharma <amoghsharma02@gmail.com>
+"""
 
 from __future__ import annotations
 
@@ -38,7 +42,10 @@ class ReviewItem:
     box_count: int
     kind: str
 
-# Reading review-set paths and sampling options from the command line.
+# Builds the CLI for the review-set builder.
+#
+# The negative_per_set count and the seed are exposed so the sampled
+# negative queue can be adjusted and reproduced.
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Create a review queue from saved YOLO predictions on real frames."
@@ -53,7 +60,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max_sheet_images", type=int, default=120)
     return parser.parse_args()
 
-# Finding supported image files inside a folder tree.
+# Finds supported image files inside a folder tree.
 def list_images(folder: Path) -> list[Path]:
     return sorted(
         path
@@ -61,7 +68,7 @@ def list_images(folder: Path) -> list[Path]:
         if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
     )
 
-# Loading YOLO label lines while skipping blank rows.
+# Loads YOLO label lines while skipping blank rows.
 def read_labels(path: Path) -> list[str]:
     if not path.exists():
         return []
@@ -71,7 +78,10 @@ def read_labels(path: Path) -> list[str]:
         if line.strip()
     ]
 
-# Collecting prediction labels for one image across the saved model runs.
+# Collects prediction labels for one image across the saved model runs.
+#
+# Each model has its own label folder, so this returns a map of
+# model name -> label lines, omitting models that found nothing.
 def prediction_labels_for(
     runs_root: Path, set_id: int, image_stem: str
 ) -> dict[str, list[str]]:
@@ -83,17 +93,25 @@ def prediction_labels_for(
             predictions[model_name] = labels
     return predictions
 
-# Copying a source frame into the review image folder.
+# Copies a source frame into the review image folder.
 def copy_image(source: Path, target: Path) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, target)
 
-# Writing YOLO labels, including empty files for negative images.
+# Writes YOLO labels, including empty files for negative images.
+#
+# An empty file is still written for negatives so every review image has
+# a matching label file, which keeps the folder structure predictable.
 def write_labels(path: Path, labels: list[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(labels) + ("\n" if labels else ""), encoding="utf-8")
 
-# Building the positive review queue and sampled negative queue from real frames.
+# Builds the positive review queue and sampled negative queue from real frames.
+#
+# Each raw set is walked: images any model flagged become review
+# candidates (with that model's pseudo-labels copied alongside), and a
+# random sample of unflagged images becomes negative candidates so the
+# reviewer checks both "did we find it" and "did we over-fire".
 def build_review_items(args: argparse.Namespace) -> list[ReviewItem]:
     rng = random.Random(args.seed)
     raw_root = args.raw_root.resolve()
@@ -156,7 +174,10 @@ def build_review_items(args: argparse.Namespace) -> list[ReviewItem]:
         negative_items, key=lambda item: item.review_name
     )
 
-# Recording every review image.
+# Records every review image into a CSV manifest.
+#
+# Each row includes the review kind, source, which models flagged it, and
+# the action a reviewer should take (verify vs confirm empty).
 def write_manifest(path: Path, items: list[ReviewItem]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as handle:
@@ -190,7 +211,10 @@ def write_manifest(path: Path, items: list[ReviewItem]) -> None:
                 ]
             )
 
-# Drawing normalized YOLO boxes onto a resized preview tile.
+# Draws normalized YOLO boxes onto a resized preview tile.
+#
+# The boxes are denormalized against the source image size, then scaled
+# and shifted to match the tile padding so they line up on the preview.
 def draw_yolo_boxes(
     draw: ImageDraw.ImageDraw,
     labels: list[str],
@@ -213,7 +237,11 @@ def draw_yolo_boxes(
         y2 = (cy + bh / 2) * source_h * scale + pad_y
         draw.rectangle((x1, y1, x2, y2), outline=color, width=3)
 
-# Creating a contact sheet that shows model suggestions for quick manual review.
+# Creates a contact sheet that shows model suggestions for quick manual review.
+#
+# Only candidate (positive) images are drawn, capped at max_sheet_images.
+# Each model's boxes are drawn in its own colour so disagreements between
+# the two models are visible at a glance.
 def make_contact_sheet(args: argparse.Namespace, items: list[ReviewItem]) -> None:
     candidate_items = [item for item in items if item.kind == "candidate"][: args.max_sheet_images]
     if not candidate_items:
@@ -271,7 +299,7 @@ def make_contact_sheet(args: argparse.Namespace, items: list[ReviewItem]) -> Non
     args.contact_sheet.parent.mkdir(parents=True, exist_ok=True)
     sheet.save(args.contact_sheet, quality=92)
 
-# Running the review-set builder and reporting the generated files.
+# Runs the review-set builder and reports the generated files.
 def main() -> None:
     args = parse_args()
     if args.negative_per_set < 0:

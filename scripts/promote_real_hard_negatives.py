@@ -1,4 +1,8 @@
-"""Promote reviewed false positives into a YOLO hard-negative set."""
+"""Promote reviewed false positives into a YOLO hard-negative set.
+
+Author:
+    Amogh Sharma <amoghsharma02@gmail.com>
+"""
 
 from __future__ import annotations
 
@@ -14,7 +18,7 @@ DEFAULT_OUT_ROOT = PROJECT_ROOT / "data" / "real_hard_negatives"
 DEFAULT_MANIFEST = PROJECT_ROOT / "outputs" / "reports" / "real_hard_negatives_manifest.csv"
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 
-# Reading paths for the reviewed images and hard-negative output dataset.
+# Builds the CLI for promoting hard negatives.
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Copy reviewed false positives into a YOLO negative-only dataset."
@@ -24,7 +28,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     return parser.parse_args()
 
-# Finding image files inside one review folder.
+# Finds image files inside one review folder.
 def list_images(folder: Path) -> list[Path]:
     if not folder.exists():
         return []
@@ -34,7 +38,11 @@ def list_images(folder: Path) -> list[Path]:
         if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
     )
 
-# Copying one reviewed negative image and creating its empty YOLO label file.
+# Copies one reviewed negative image and creates its empty YOLO label file.
+#
+# The empty label is the whole point: it tells the model this image has
+# no cockroach. The group prefix keeps false positives distinguishable
+# from sampled negatives in the output folder.
 def copy_with_empty_label(source: Path, out_root: Path, group: str) -> tuple[Path, Path]:
     image_dir = out_root / "images"
     label_dir = out_root / "labels"
@@ -48,7 +56,10 @@ def copy_with_empty_label(source: Path, out_root: Path, group: str) -> tuple[Pat
     target_label.write_text("", encoding="utf-8")
     return target_image, target_label
 
-# Promoting reviewed false positives and sampled negatives into a YOLO dataset.
+# Promotes reviewed false positives and sampled negatives into a YOLO dataset.
+#
+# Both groups become empty-label images, and a manifest CSV records where
+# every file came from so the set can be audited later.
 def main() -> None:
     args = parse_args()
     review_root = args.review_root.resolve()
